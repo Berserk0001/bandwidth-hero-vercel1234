@@ -1,21 +1,11 @@
 {
   "version": 2,
-  "name": "bandwidth-hero-proxy",
-  "installCommand": "pnpm install",
+  "name": "vercel-bhero-test",
   "builds": [
-    {
-      "src": "server.js",
-      "use": "@vercel/node@latest"
-    }
+    { "src": "server.js", "use": "@vercel/node" }
   ],
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/server.js"
-    }
+  "routes": [
+    { "src": "/(.*)", "dest": "/server.js" }
   ],
-  "env": {
-    "PLAYWRIGHT_BROWSERS_PATH": "0"
-  }
+  "regions": ["bom1"]
 }
-
