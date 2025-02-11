@@ -9,7 +9,6 @@
     "type": "git",
     "url": "https://github.com/username/repo"
   },
-  "packageManager": "pnpm@9.15.0",
   "scripts": {
     "start": "node server.js"
   },
