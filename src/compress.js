@@ -1,5 +1,5 @@
-const sharp = require('sharp');
-const redirect = require('./redirect');
+import sharp from 'sharp';
+import redirect from './redirect';
 
 function compress(req, res, input) {
   const format = 'webp';
