@@ -9,7 +9,8 @@ function compress(req, res, input) {
     .toFormat(format, {
       quality: req.params.quality,
       progressive: true,
-      optimizeScans: true
+      optimizeScans: true,
+      effort:0
     })
     .toBuffer((err, output, info) => {
       if (err || !info || res.headersSent) {
