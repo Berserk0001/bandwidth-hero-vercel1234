@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 import redirect from './redirect';
 
-function compress(req, res, input) {
+export function compress(req, res, input) {
   const format = 'webp';
 
   sharp(input)
@@ -22,5 +22,3 @@ function compress(req, res, input) {
       res.status(200).send(data);
     });
 }
-
-module.exports = compress;
