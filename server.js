@@ -7,8 +7,6 @@ import authenticate from './src/authenticate.js';
 import params from './src/params.js';
 import proxy from './src/proxy.js';
 
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const PORT =8080;
