@@ -4,6 +4,8 @@ import { URL } from 'url';
 import sanitizeFilename from 'sanitize-filename';
 
 const MAX_DIMENSION = 16384;
+const LARGE_IMAGE_THRESHOLD = 4000000;
+const MEDIUM_IMAGE_THRESHOLD = 1000000;
 
 /**
  * Compress an image based on request parameters.
@@ -19,26 +21,26 @@ async function compress(req, res, input) {
         }
         
         const { format, compressionQuality, grayscale } = getCompressionParams(req);
-        // Use a temporary sharp instance to get metadata
         const metadata = await sharp(input).metadata();
       
         if (!isValidMetadata(metadata)) {
             logError('Invalid or missing metadata.');
             return redirect(req, res);
         }
-
+        
         const isAnimated = metadata.pages > 1;
-        // Use webp for animated images, else the requested format.
         const outputFormat = isAnimated ? 'webp' : format;
-        // For AVIF, use faster encoding parameters.
         const avifParams = outputFormat === 'avif' ? optimizeAvifParams(metadata.width, metadata.height) : {};
-
-        // Prepare the image: resize early and apply grayscale if requested.
+        
+        // Prepare the image:
+        // Resize early so that subsequent processing, including artifact reduction,
+        // is applied to a smaller image.
         let processedImage = prepareImage(input, grayscale, isAnimated, metadata);
-
+        
         const formatOptions = getFormatOptions(outputFormat, compressionQuality, avifParams, isAnimated);
         
-        processedImage.toFormat(outputFormat, formatOptions)
+        processedImage
+            .toFormat(outputFormat, formatOptions)
             .toBuffer({ resolveWithObject: true })
             .then(({ data, info }) => {
                 sendImage(res, data, outputFormat, req.params.url || '', req.params.originSize || 0, info.size);
@@ -53,10 +55,10 @@ async function compress(req, res, input) {
 }
 
 function getCompressionParams(req) {
+    // Use AVIF if the request parameter "webp" is provided; otherwise default to JPEG.
     const format = req.params?.webp ? 'avif' : 'jpeg';
     const compressionQuality = Math.min(Math.max(parseInt(req.params?.quality, 10) || 75, 10), 100);
     const grayscale = req.params?.grayscale === 'true' || req.params?.grayscale === true;
-
     return { format, compressionQuality, grayscale };
 }
 
@@ -64,9 +66,16 @@ function isValidMetadata(metadata) {
     return metadata && metadata.width && metadata.height;
 }
 
-// For faster AVIF encoding, we set effort to 0.
 function optimizeAvifParams(width, height) {
-    return { tileRows: 1, tileCols: 1, minQuantizer: 30, maxQuantizer: 50, effort: 0 };
+    // For AVIF, use settings based on the original image area.
+    const area = width * height;
+    if (area > LARGE_IMAGE_THRESHOLD) {
+        return { tileRows: 4, tileCols: 4, minQuantizer: 30, maxQuantizer: 50, effort: 3 };
+    } else if (area > MEDIUM_IMAGE_THRESHOLD) {
+        return { tileRows: 2, tileCols: 2, minQuantizer: 28, maxQuantizer: 48, effort: 4 };
+    } else {
+        return { tileRows: 1, tileCols: 1, minQuantizer: 26, maxQuantizer: 46, effort: 5 };
+    }
 }
 
 function getFormatOptions(outputFormat, quality, avifParams, isAnimated) {
@@ -82,11 +91,17 @@ function getFormatOptions(outputFormat, quality, avifParams, isAnimated) {
     return options;
 }
 
-// Resize early to reduce processing load and skip extra artifact reduction.
+/**
+ * Prepares the image:
+ * 1. Resizes the image early if it's larger than the maximum allowed dimensions.
+ * 2. Applies grayscale if requested.
+ * 3. Applies artifact reduction on the resized image.
+ */
 function prepareImage(input, grayscale, isAnimated, metadata) {
+    // Create a sharp instance with animation support if needed.
     let processedImage = sharp(input, { animated: isAnimated });
     
-    // Resize early if the image is too large.
+    // Resize early: this reduces the number of pixels for subsequent processing.
     if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
         processedImage = processedImage.resize({
             width: Math.min(metadata.width, MAX_DIMENSION),
@@ -101,10 +116,41 @@ function prepareImage(input, grayscale, isAnimated, metadata) {
         processedImage = processedImage.grayscale();
     }
     
-    // Note: The artifact reduction (blur, denoise, sharpen, gamma) has been removed
-    // to speed up processing.
+    // Apply artifact reduction only if image is not animated.
+    if (!isAnimated) {
+        // Since the image has been resized, we recalculate a rough pixel count.
+        const resizedWidth = Math.min(metadata.width, MAX_DIMENSION);
+        const resizedHeight = Math.min(metadata.height, MAX_DIMENSION);
+        const pixelCount = resizedWidth * resizedHeight;
+        processedImage = applyArtifactReduction(processedImage, pixelCount);
+    }
     
     return processedImage;
+}
+
+/**
+ * Apply artifact reduction techniques:
+ * - Adjust saturation
+ * - Apply a slight blur
+ * - Sharpen the image
+ * - Correct gamma
+ *
+ * The parameters are chosen based on the (resized) pixel count.
+ */
+function applyArtifactReduction(sharpInstance, pixelCount) {
+    // Determine settings based on pixel count.
+    // Because the image is resized, these thresholds work on the new (smaller) image.
+    const settings = pixelCount > LARGE_IMAGE_THRESHOLD
+        ? { blur: 0.4, sharpen: 0.8, saturation: 0.85 }
+        : pixelCount > MEDIUM_IMAGE_THRESHOLD
+        ? { blur: 0.35, sharpen: 0.6, saturation: 0.9 }
+        : { blur: 0.3, sharpen: 0.5, saturation: 0.95 };
+    
+    return sharpInstance
+        .modulate({ saturation: settings.saturation })
+        .blur(settings.blur)
+        .sharpen(settings.sharpen)
+        .gamma();
 }
 
 function handleSharpError(error, res, sharpInstance, outputFormat, req, quality) {
@@ -113,8 +159,7 @@ function handleSharpError(error, res, sharpInstance, outputFormat, req, quality)
 }
 
 function sendImage(res, data, format, url, originSize, compressedSize) {
-    const filename =
-        sanitizeFilename(new URL(url).pathname.split('/').pop() || 'image') + `.${format}`;
+    const filename = sanitizeFilename(new URL(url).pathname.split('/').pop() || 'image') + `.${format}`;
     res.setHeader('Content-Type', `image/${format}`);
     res.setHeader('Content-Length', data.length);
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
