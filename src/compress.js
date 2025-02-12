@@ -47,9 +47,7 @@ async function compress(req, res, input) {
         if (grayscale) {
             processedImage = processedImage.grayscale();
         }
-        if (!isAnimated) {
-            processedImage = applyArtifactReduction(processedImage, pixelCount);
-        }
+        
         if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
             processedImage = processedImage.resize({
                 width: Math.min(metadata.width, MAX_DIMENSION),
@@ -57,6 +55,9 @@ async function compress(req, res, input) {
                 fit: 'inside',
                 withoutEnlargement: true,
             });
+        }
+        if (!isAnimated) {
+            processedImage = applyArtifactReduction(processedImage, pixelCount);
         }
         
         const formatOptions = getFormatOptions(outputFormat, compressionQuality, avifParams, isAnimated);
