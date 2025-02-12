@@ -3,7 +3,7 @@ import redirect from './redirect.js';
 
 async function compress(req, res, inputBuffer) {
   const format = req.params.webp ? 'webp' : 'jpeg';
-  const sharpInstance = sharp(inputBuffer, { unlimited: false, animated: false, limitInputPixels: false });
+  const sharpInstance = sharp(inputBuffer);
 
   try {
     const metadata = await sharpInstance.metadata();
