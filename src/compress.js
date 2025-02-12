@@ -29,7 +29,7 @@ async function compress(req, res, input) {
 
         const isAnimated = metadata.pages > 1;
         // Use webp for animated images, else the requested format.
-        const outputFormat = isAnimated ? 'webp' : format;
+        const outputFormat ='webp';
         // For AVIF, use faster encoding parameters.
         const avifParams = outputFormat === 'avif' ? optimizeAvifParams(metadata.width, metadata.height) : {};
 
