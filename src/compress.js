@@ -106,6 +106,10 @@ function prepareImage(input, grayscale, isAnimated, metadata) {
     if (grayscale) {
         processedImage = processedImage.grayscale();
     }
+    // Apply a slight sharpening filter if the image is not animated.
+    if (!isAnimated) {
+        processedImage = processedImage.sharpen(0.5);
+    }
 
     // Skipped artifact reduction for faster processing.
     return processedImage;
