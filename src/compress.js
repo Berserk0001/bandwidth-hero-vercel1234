@@ -4,6 +4,7 @@ import redirect from './redirect.js';
 async function compress(req, res, inputBuffer) {
   const format = req.params.webp ? 'webp' : 'jpeg';
   const sharpInstance = sharp(inputBuffer);
+  const MAX_HEIGHT = 16383;
 
   try {
     const metadata = await sharpInstance.metadata();
