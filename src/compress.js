@@ -2,15 +2,8 @@ import sharp from 'sharp';
 import redirect from './redirect.js';
 import { URL } from 'url';
 import sanitizeFilename from 'sanitize-filename';
-import os from 'os';
-
-// Configure Sharp to use all available cores and a tuned cache.
-sharp.concurrency(os.cpus().length);
-sharp.cache({ files: 200, memory: 200, items: 500 });
 
 const MAX_DIMENSION = 16384;
-const LARGE_IMAGE_THRESHOLD = 4000000;
-const MEDIUM_IMAGE_THRESHOLD = 1000000;
 
 /**
  * Compress an image based on request parameters.
@@ -26,10 +19,8 @@ async function compress(req, res, input) {
         }
         
         const { format, compressionQuality, grayscale } = getCompressionParams(req);
-
-        // Create the Sharp instance with fastShrinkOnLoad enabled
-        const sharpInstance = sharp(input, { fastShrinkOnLoad: true });
-        const metadata = await sharpInstance.metadata();
+        // Use a temporary sharp instance to get metadata
+        const metadata = await sharp(input).metadata();
       
         if (!isValidMetadata(metadata)) {
             logError('Invalid or missing metadata.');
@@ -37,36 +28,24 @@ async function compress(req, res, input) {
         }
 
         const isAnimated = metadata.pages > 1;
-        const pixelCount = metadata.width * metadata.height;
-        // Force animated images to use a faster output format (webp)
-        const outputFormat = 'webp';
+        // Use webp for animated images, else the requested format.
+        const outputFormat = isAnimated ? 'webp' : format;
+        // For AVIF, use faster encoding parameters.
         const avifParams = outputFormat === 'avif' ? optimizeAvifParams(metadata.width, metadata.height) : {};
 
-        // Instead of creating a new instance, clone the existing one to save overhead.
-        let processedImage = sharpInstance.clone().withMetadata();
-        if (grayscale) {
-            processedImage = processedImage.grayscale();
-        }
-        
-        if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
-            processedImage = processedImage.resize({
-                width: Math.min(metadata.width, MAX_DIMENSION),
-                height: Math.min(metadata.height, MAX_DIMENSION),
-                fit: 'inside',
-                withoutEnlargement: true,
-            });
-        }
-        if (!isAnimated) {
-            processedImage = applyArtifactReduction(processedImage, pixelCount);
-        }
-        
+        // Prepare the image: resize early and apply grayscale if requested.
+        let processedImage = prepareImage(input, grayscale, isAnimated, metadata);
+
         const formatOptions = getFormatOptions(outputFormat, compressionQuality, avifParams, isAnimated);
         
-        const { data, info } = await processedImage
-            .toFormat(outputFormat, formatOptions)
-            .toBuffer({ resolveWithObject: true });
-            
-        sendImage(res, data, outputFormat, req.params.url || '', req.params.originSize || 0, info.size);
+        processedImage.toFormat(outputFormat, formatOptions)
+            .toBuffer({ resolveWithObject: true })
+            .then(({ data, info }) => {
+                sendImage(res, data, outputFormat, req.params.url || '', req.params.originSize || 0, info.size);
+            })
+            .catch((error) => {
+                handleSharpError(error, res, processedImage, outputFormat, req, compressionQuality);
+            });
     } catch (err) {
         logError('Error during image compression:', err);
         redirect(req, res);
@@ -74,10 +53,10 @@ async function compress(req, res, input) {
 }
 
 function getCompressionParams(req) {
-    // Use avif if the webp parameter is provided (or vice versa, as per your original logic)
     const format = req.params?.webp ? 'avif' : 'jpeg';
     const compressionQuality = Math.min(Math.max(parseInt(req.params?.quality, 10) || 75, 10), 100);
     const grayscale = req.params?.grayscale === 'true' || req.params?.grayscale === true;
+
     return { format, compressionQuality, grayscale };
 }
 
@@ -85,16 +64,9 @@ function isValidMetadata(metadata) {
     return metadata && metadata.width && metadata.height;
 }
 
+// For faster AVIF encoding, we set effort to 0.
 function optimizeAvifParams(width, height) {
-    const area = width * height;
-    // Adjust parameters to favor speed (using a "speed" option) in addition to effort.
-    if (area > LARGE_IMAGE_THRESHOLD) {
-        return { tileRows: 4, tileCols: 4, minQuantizer: 30, maxQuantizer: 50, effort: 0, speed: 10 };
-    } else if (area > MEDIUM_IMAGE_THRESHOLD) {
-        return { tileRows: 2, tileCols: 2, minQuantizer: 28, maxQuantizer: 48, effort: 0, speed: 10 };
-    } else {
-        return { tileRows: 1, tileCols: 1, minQuantizer: 26, maxQuantizer: 46, effort: 0, speed: 10 };
-    }
+    return { tileRows: 1, tileCols: 1, minQuantizer: 30, maxQuantizer: 50, effort: 0 };
 }
 
 function getFormatOptions(outputFormat, quality, avifParams, isAnimated) {
@@ -110,23 +82,39 @@ function getFormatOptions(outputFormat, quality, avifParams, isAnimated) {
     return options;
 }
 
-function applyArtifactReduction(sharpInstance, pixelCount) {
-    // Note: If speed is critical and you can sacrifice a bit of quality,
-    // consider removing or reducing these extra processing steps.
-    const settings = pixelCount > LARGE_IMAGE_THRESHOLD
-        ? { blur: 0.4, denoise: 0.15, sharpen: 0.8, saturation: 0.85 }
-        : pixelCount > MEDIUM_IMAGE_THRESHOLD
-        ? { blur: 0.35, denoise: 0.12, sharpen: 0.6, saturation: 0.9 }
-        : { blur: 0.3, denoise: 0.1, sharpen: 0.5, saturation: 0.95 };
-    return sharpInstance
-        .modulate({ saturation: settings.saturation })
-        .blur(settings.blur)
-        .sharpen(settings.sharpen)
-        .gamma();
+// Resize early to reduce processing load and skip extra artifact reduction.
+function prepareImage(input, grayscale, isAnimated, metadata) {
+    let processedImage = sharp(input, { animated: isAnimated });
+    
+    // Resize early if the image is too large.
+    if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
+        processedImage = processedImage.resize({
+            width: Math.min(metadata.width, MAX_DIMENSION),
+            height: Math.min(metadata.height, MAX_DIMENSION),
+            fit: 'inside',
+            withoutEnlargement: true,
+        });
+    }
+    
+    // Apply grayscale if requested.
+    if (grayscale) {
+        processedImage = processedImage.grayscale();
+    }
+    
+    // Note: The artifact reduction (blur, denoise, sharpen, gamma) has been removed
+    // to speed up processing.
+    
+    return processedImage;
+}
+
+function handleSharpError(error, res, sharpInstance, outputFormat, req, quality) {
+    logError('Unhandled sharp error:', error);
+    redirect(req, res);
 }
 
 function sendImage(res, data, format, url, originSize, compressedSize) {
-    const filename = sanitizeFilename(new URL(url).pathname.split('/').pop() || 'image') + `.${format}`;
+    const filename =
+        sanitizeFilename(new URL(url).pathname.split('/').pop() || 'image') + `.${format}`;
     res.setHeader('Content-Type', `image/${format}`);
     res.setHeader('Content-Length', data.length);
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
