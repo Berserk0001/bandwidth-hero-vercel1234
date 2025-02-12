@@ -39,7 +39,7 @@ async function compress(req, res, input) {
         const isAnimated = metadata.pages > 1;
         const pixelCount = metadata.width * metadata.height;
         // Force animated images to use a faster output format (webp)
-        const outputFormat = isAnimated ? 'webp' : format;
+        const outputFormat = 'webp';
         const avifParams = outputFormat === 'avif' ? optimizeAvifParams(metadata.width, metadata.height) : {};
 
         // Instead of creating a new instance, clone the existing one to save overhead.
