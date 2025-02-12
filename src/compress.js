@@ -70,11 +70,11 @@ function optimizeAvifParams(width, height) {
     // For AVIF, use settings based on the original image area.
     const area = width * height;
     if (area > LARGE_IMAGE_THRESHOLD) {
-        return { tileRows: 4, tileCols: 4, minQuantizer: 30, maxQuantizer: 50, effort: 3 };
+        return { tileRows: 4, tileCols: 4, minQuantizer: 30, maxQuantizer: 50, effort: 0 };
     } else if (area > MEDIUM_IMAGE_THRESHOLD) {
-        return { tileRows: 2, tileCols: 2, minQuantizer: 28, maxQuantizer: 48, effort: 4 };
+        return { tileRows: 2, tileCols: 2, minQuantizer: 28, maxQuantizer: 48, effort: 0 };
     } else {
-        return { tileRows: 1, tileCols: 1, minQuantizer: 26, maxQuantizer: 46, effort: 5 };
+        return { tileRows: 1, tileCols: 1, minQuantizer: 26, maxQuantizer: 46, effort: 0 };
     }
 }
 
